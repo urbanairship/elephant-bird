@@ -6,8 +6,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 
-import com.google.common.base.Function;
-import com.google.common.base.Predicates;
+import com.google.common.base.*;
 import com.google.common.collect.Lists;
 import com.google.protobuf.DescriptorProtos.DescriptorProto;
 import com.google.protobuf.Descriptors.Descriptor;
@@ -27,6 +26,7 @@ import com.google.protobuf.Message;
 import com.google.protobuf.ProtocolMessageEnum;
 import com.google.protobuf.UninitializedMessageException;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.io.Text;
 import org.slf4j.Logger;
@@ -46,6 +46,7 @@ public class Protobufs {
   public static final String IGNORE_KEY = "IGNORE";
 
   private static final String CLASS_CONF_PREFIX = "elephantbird.protobuf.class.for.";
+  private static final Joiner DOT_JOINER = Joiner.on('.').skipNulls();
 
   /**
    * Returns Protobuf class. The class name could be either normal name or
@@ -66,7 +67,7 @@ public class Protobufs {
       }
     } catch (ClassNotFoundException e) {
       // the class name might be canonical name.
-      protoClass = getInnerProtobufClass(protoClassName);
+      protoClass = getByCanonicalClassName(protoClassName);
     }
 
     return protoClass.asSubclass(Message.class);
@@ -80,25 +81,45 @@ public class Protobufs {
     return protoClass == null || protoClass.getCanonicalName().equals(DynamicMessage.class.getCanonicalName());
   }
 
-  public static Class<? extends Message> getInnerProtobufClass(String canonicalClassName) {
-    // is an inner class and is not visible from the outside.  We have to instantiate
-    String parentClass = canonicalClassName.substring(0, canonicalClassName.lastIndexOf("."));
-    String subclass = canonicalClassName.substring(canonicalClassName.lastIndexOf(".") + 1);
-    return getInnerClass(parentClass, subclass);
-  }
+  /**
+   * Utility method to retrieve deeply nested {@link Class} objects.
+   *
+   * @see <a href=http://docs.oracle.com/javase/specs/jls/se5.0/html/names.html#25430>Fully Qualified Names and Canonical Names</a>
+   *
+   * @param canonicalClassName String represented a valid canonical classname.
+   * @return Class
+   */
+  public static Class<? extends Message> getByCanonicalClassName(String canonicalClassName) {
+    Preconditions.checkArgument(StringUtils.isNotBlank(canonicalClassName));
 
-  public static Class<? extends Message> getInnerClass(String canonicalParentName, String subclassName) {
-    try {
-      Class<?> outerClass = Class.forName(canonicalParentName);
-      for (Class<?> innerClass: outerClass.getDeclaredClasses()) {
-        if (innerClass.getSimpleName().equals(subclassName)) {
-          return innerClass.asSubclass(Message.class);
+    final Iterable<String> canonPath = Splitter.on('.').split(canonicalClassName);
+    String candidateName = null;
+    Class<?> candidateClass = null;
+
+    for (String s : canonPath) {
+      candidateName = DOT_JOINER.join(candidateName, s);
+      if (candidateClass == null) {
+        try {
+          candidateClass = Class.forName(candidateName);
+        } catch (ClassNotFoundException ignored) {
+          if (candidateName.equals(canonicalClassName)) {
+            throw new IllegalArgumentException("Could not find " + canonicalClassName);
+          }
+        }
+      } else {
+        for (Class<?> aClass1 : candidateClass.getDeclaredClasses()) {
+          if (aClass1.getSimpleName().equals(s)) {
+            candidateClass = aClass1;
+            break;
+          }
         }
       }
-    } catch (ClassNotFoundException e) {
-      LOG.error("Could not find class with parent " + canonicalParentName + " and inner class " + subclassName, e);
-      throw new IllegalArgumentException(e);
+
+      if (candidateClass != null && candidateClass.getCanonicalName().equals(canonicalClassName)) {
+        return candidateClass.asSubclass(Message.class);
+      }
     }
+
     return null;
   }
 
@@ -220,7 +241,7 @@ public class Protobufs {
   }
 
   public static Message instantiateFromClassName(String canonicalClassName) {
-    Class<? extends Message> protoClass = getInnerProtobufClass(canonicalClassName);
+    Class<? extends Message> protoClass = getByCanonicalClassName(canonicalClassName);
     Message.Builder builder = getMessageBuilder(protoClass);
     return builder.build();
   }
