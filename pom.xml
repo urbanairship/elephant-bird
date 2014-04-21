@@ -564,6 +564,9 @@
         <plugin>
           <artifactId>maven-gpg-plugin</artifactId>
           <version>1.4</version>
+          <configuration>
+            <skip>true</skip>
+          </configuration>
         </plugin>
         <plugin>
           <artifactId>maven-release-plugin</artifactId>
